@@ -65,7 +65,7 @@
     Спустя некоторое время происходит автовакуум
 
     ```sql
-    postgres=# select relname, last_autovacuum, n_dead_tup from pg_stat_user_tables where relname = 'cinemas';
+    postgres=# SELECT relname, last_autovacuum, n_dead_tup FROM pg_stat_user_tables WHERE relname = 'cinemas';
     relname |        last_autovacuum        | n_dead_tup
     ---------+-------------------------------+------------
     cinemas | 2024-10-13 08:02:47.500585+03 |          0
@@ -98,7 +98,7 @@
 6. Выключение `autovacuum` для таблицы cinemas
     
     ```sql
-     ALTER TABLE cinemas SET (autovacuum_enabled = off);
+    postgres=# ALTER TABLE cinemas SET (autovacuum_enabled = off);
     ```
 
 7. Обновление данных в таблице cinemas 10 раз, после отключения `autovacuum` и вывод размера таблицы
@@ -131,7 +131,7 @@
 8. Включение `autovacuum`
 
     ```sql
-    ALTER TABLE cinemas SET (autovacuum_enabled = on);
+    postgres=# ALTER TABLE cinemas SET (autovacuum_enabled = on);
     ```
 
 9. Задание со звездочкой
@@ -144,7 +144,7 @@
     DECLARE
         i INTEGER;
     BEGIN
-        FOR i IN 1..5 LOOP
+        FOR i IN 1..10 LOOP
             UPDATE cinemas
             SET name = name || chr(trunc(65 + random() * 26)::int) || chr(trunc(65 + random() * 26)::int)
             WHERE true;
