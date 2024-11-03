@@ -2,70 +2,119 @@
 
 ### Задание
 
-Протестировать падение производительности при использовании
-pgbouncer в разных режимах: statement, transaction, session
+Развернуть асинхронную реплику и протестировать производительность по сравнению с single инстансом
+
+cо *: переделать под синхронную реплику
 
 ### Результат
 
-1. Запустим бенчмарк на стандартном порту без `pgbouncer` для интереса. 100 клиентов в 16 потоков, тест будет продолжаться 60 секунд.
+1. Тестируем с помощью `pgbench` single инстанс
 
     ```bash
-    // подключение напрямую
-    pgbench -p 5432 -c 100 -j 16 -T 60 -U postgres -h localhost postgres
+    // TPC-B режим
+    pgbench -p 5433 -c 100 -j 2 -T 60 -U postgres -h localhost postgres
 
-    number of transactions actually processed: 52720
+    number of transactions actually processed: 53853
     number of failed transactions: 0 (0.000%)
-    latency average = 112.301 ms
-    initial connection time = 1055.610 ms
-    tps = 890.461858 (without initial connection time)
+    latency average = 109.892 ms
+    initial connection time = 1066.415 ms
+    tps = 909.987835 (without initial connection time)
 
-    // подключение через pgbouncer
-    pgbench -p 6432 -c 100 -j 16 -T 60 -U postgres -h localhost postgres
+    // select-only режим
+    pgbench -p 5433 -c 100 -j 2 -T 60 -S -U postgres -h localhost postgres
 
-    number of transactions actually processed: 83497
+    number of transactions actually processed: 841673
     number of failed transactions: 0 (0.000%)
-    latency average = 71.917 ms
-    initial connection time = 34.125 ms
-    tps = 1390.492152 (without initial connection time)
+    latency average = 6.998 ms
+    initial connection time = 1133.853 ms
+    tps = 14288.948859 (without initial connection time)
     ```
-    Видно, что производительность запросов с `pgbouncer` возросла:
-    - Количество выполненных транзакций больше - 83 497 vs 52 720
-    - Средняя задержка меньше - 71.917 ms vs 112.301 ms
-    - Количество операций в секунду выше - 1390 vs 890
 
-2. Теперь запустим бенчмарк добавив флаг -S чтобы pgbench выполнял только запросы на выборку, иначе будет ошибка в режиме statement - `FATAL:  transaction blocks not allowed in statement pooling mode`. И будем менять настройку `pool_mode`. После изменения настройки делаем ` sudo systemctl restart pgbouncer`
+2. Создаем рядом кластер `slave`, делаем его асинхронной репликой и тестируем
 
     ```bash
-    // session
-    number of transactions actually processed: 1040826
-    number of failed transactions: 0 (0.000%)
-    latency average = 5.764 ms
-    initial connection time = 33.831 ms
-    tps = 17350.181971 (without initial connection time)
+    // список кластеров
+    15  master  5433 online          postgres /var/lib/postgresql/15/master /var/log/postgresql/postgresql-15-master.log
 
-    // transaction
-    number of transactions actually processed: 963708
-    number of failed transactions: 0 (0.000%)
-    latency average = 6.224 ms
-    initial connection time = 27.941 ms
-    tps = 16066.502130 (without initial connection time)
+    15  slave   5434 online,recovery postgres /var/lib/postgresql/15/slave  /var/log/postgresql/postgresql-15-slave.log
 
-    // statement
-    number of transactions actually processed: 957963
-    number of failed transactions: 0 (0.000%)
-    latency average = 6.262 ms
-    initial connection time = 29.951 ms
-    tps = 15970.565145 (without initial connection time)
+    // запустим инициализацию pgbench в мастер кластере
+    pgbench -p 5433 -i -U postgres -h localhost postgres
+
+    //проверим в slave кластере, что данные появились
+    psql -p 5434 -U postgres
+
+    \d
+              List of relations
+    Schema |       Name       | Type  |  Owner
+    --------+------------------+-------+----------
+    public | pgbench_accounts | table | postgres
+    public | pgbench_branches | table | postgres
+    public | pgbench_history  | table | postgres
+    public | pgbench_tellers  | table | postgres
+    (4 rows)
     ```
 
-    Получился такой результат:
+    ```sql
+    -- проверяем на мастер кластере, что реплика работает
+    postgres=# SELECT usename, application_name, client_addr, state, sync_state FROM pg_stat_replication;
+    usename  | application_name | client_addr |   state   | sync_state
+    ----------+------------------+-------------+-----------+------------
+    postgres | 15/slave         | 127.0.0.1   | streaming | async
+    (1 row)
+    ```
+    Запускаем бенчмарк
 
-    | Режим        | Кол-во транз. | Средняя задержка | Операций в сек. |
-    | ------------ | ------------- | ---------------- | --------------- |
-    | session      | 1 040 826     | 5.764 ms         | 17350           |
-    | transaction  | 963 708       | 6.224 ms         | 16066           |
-    | statement    | 957 963       | 6.262 ms         | 15970           |
+    ```bash
+    // TPC-B режим
+    pgbench -p 5433 -c 100 -j 2 -T 60 -U postgres -h localhost postgres
+
+    number of transactions actually processed: 40041
+    number of failed transactions: 0 (0.000%)
+    latency average = 147.785 ms
+    initial connection time = 1092.220 ms
+    tps = 676.660945 (without initial connection time)
+
+    // select-only режим
+    pgbench -p 5433 -c 100 -j 2 -T 60 -S -U postgres -h localhost postgres
+
+    number of transactions actually processed: 849054
+    number of failed transactions: 0 (0.000%)
+    latency average = 6.961 ms
+    initial connection time = 925.713 ms
+    tps = 14364.768175 (without initial connection time)
+    ```
+
+3. Переключаем на синхронную репликацию*
+    
+    ```sql
+    postgres=# SELECT usename, application_name, client_addr, state, sync_state FROM pg_stat_replication;
+    usename  | application_name | client_addr |   state   | sync_state
+    ----------+------------------+-------------+-----------+------------
+    postgres | 15/slave         | 127.0.0.1   | streaming | sync
+    (1 row)
+    ```
+
+    ```bash
+    // TPC-B режим
+    pgbench -p 5433 -c 100 -j 2 -T 60 -U postgres -h localhost postgres
+    
+    number of transactions actually processed: 40807
+    number of failed transactions: 0 (0.000%)
+    latency average = 145.420 ms
+    initial connection time = 885.686 ms
+    tps = 687.661946 (without initial connection time)
+
+    // select-only режим
+    pgbench -p 5433 -c 100 -j 2 -T 60 -S -U postgres -h localhost postgres
+    
+    number of transactions actually processed: 856555
+    number of failed transactions: 0 (0.000%)
+    latency average = 6.889 ms
+    initial connection time = 1016.769 ms
+    tps = 14515.345845 (without initial connection time)
+    ```
 
 ### Вывод
 
-Режим session обеспечивает наибольшую производительность и минимальную задержку в рамках данного бенчмарка. Режим transaction показал середину, а statement самые низкие показатели.
+Производительность падает при включении репликации, при переходе с single инстанса на асинхронную репликацию. При переходе на синхронную репликацию производительность остается почти на уровне асинхронной.
